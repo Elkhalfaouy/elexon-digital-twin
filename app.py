@@ -37,6 +37,7 @@ st.markdown("""
 st.sidebar.markdown("## ⚡ **elexon** charging")
 st.sidebar.caption("Digital Twin & Feasibility Tool")
 st.sidebar.divider()
+st.sidebar.caption("Author: Amine El khalfaouy")
 # --- NEW: MULTI-SITE SELECTOR ---
 project_name = st.sidebar.text_input("🏢 Project Name / Site:", value="Schkeuditz Logistics Node")
 st.title(f"🏭 **Elexon Charging Hub Digital Twin** - {project_name}")
