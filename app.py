@@ -487,7 +487,7 @@ with tab_gis:
         # Ranking table
         st.markdown("### Site Ranking")
         df_rank = pd.DataFrame(ranked_sites)[["site_id", "name", "grid_kva", "land_area_m2", "score"]]
-        st.dataframe(df_rank, use_container_width=True, hide_index=True)
+        st.dataframe(df_rank, width='stretch', hide_index=True)
         st.caption("Marker colors: green = top tier, orange = mid tier, red = lower tier.")
 
         # Dropdown selection
@@ -569,7 +569,7 @@ with tab_dash:
                 "⏱️ Payback": f"{st.session_state['scenarios'][k]['Payback (Yrs)']:.1f} yrs",
                 "🔋 Utilization": f"{st.session_state['scenarios'][k]['Charging Hours']:.0f} hrs"
             })
-        st.dataframe(pd.DataFrame(scenario_data), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(scenario_data), width='stretch', hide_index=True)
     
     # Professional System Health Dashboard
     st.markdown("### 🔍 **System Health Dashboard**")
@@ -771,7 +771,7 @@ with tab_tech:
     fig.add_annotation(text="Warning Zone", x=0.02, y=transformer_limit_kva*0.875, showarrow=False, font=dict(color='#d97706'))
     fig.add_annotation(text="Critical Zone", x=0.02, y=transformer_limit_kva*1.05, showarrow=False, font=dict(color='#dc2626'))
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 with tab_serv:
     st.markdown("### Service Level Analysis")
     st.info("💡 **Why 99% Service Level?** Industry standard for infrastructure reliability - allows 1% queuing while ensuring high service quality. Service level = (Energy Served / Energy Demanded) × 100%. Demand = traffic × power × charging time.")
@@ -865,7 +865,7 @@ with tab_serv:
     fig_cap.add_annotation(text="Optimal Range", x=0.02, y=n_hpc * hpc_power_kw * 0.8, showarrow=False, font=dict(color='#d97706', size=10))
     fig_cap.add_annotation(text="Overloaded", x=0.02, y=n_hpc * hpc_power_kw * 0.95, showarrow=False, font=dict(color='#dc2626', size=10))
 
-    st.plotly_chart(fig_cap, use_container_width=True)
+    st.plotly_chart(fig_cap, width='stretch')
 
 with tab_fin:
     c1, c2 = st.columns([2, 1])
@@ -903,7 +903,7 @@ with tab_fin:
             showlegend=False
         )
 
-        st.plotly_chart(fig_w, use_container_width=True)
+        st.plotly_chart(fig_w, width='stretch')
     with c2:
         st.metric("LCOC", f"€{lcoc:.2f} / kWh")
         st.metric("Payback", f"{payback:.1f} Years")
@@ -949,7 +949,7 @@ with tab_long:
         fig_cf.add_vline(x=breakeven_year, line_width=3, line_dash="dash", line_color="#f59e0b",
                         annotation_text=f"Break-even: Year {breakeven_year}", annotation_position="top")
 
-    st.plotly_chart(fig_cf, use_container_width=True)
+    st.plotly_chart(fig_cf, width='stretch')
 with tab_capex:
     st.subheader("📋 Detailed Bill of Materials")
     capex_items = {
@@ -959,7 +959,7 @@ with tab_capex:
         "Subtotal (€)": [n_hpc*cost_dispenser, n_power_units*cost_cabinet, n_ac*cost_ac_unit, n_hpc*cost_civil_hpc, n_power_units*cost_civil_cab, cost_cabling, cost_grid_fee, cost_trafo_install, cost_soft, pv_kwp*cost_pv_unit, bess_kwh*cost_bess_unit]
     }
     df_capex = pd.DataFrame(capex_items)
-    st.dataframe(df_capex.style.format({"Unit Price": "€{:,.0f}", "Subtotal (€)": "€{:,.0f}"}), use_container_width=True)
+    st.dataframe(df_capex.style.format({"Unit Price": "€{:,.0f}", "Subtotal (€)": "€{:,.0f}"}), width='stretch')
     st.success(f"**TOTAL PROJECT INVESTMENT:** €{capex_total:,.2f}")
     # Enhanced Pie chart of capex breakdown
     try:
@@ -1004,7 +1004,7 @@ with tab_capex:
                 showarrow=False
             )
 
-            st.plotly_chart(fig_pie, use_container_width=True)
+            st.plotly_chart(fig_pie, width='stretch')
     except Exception as e:
         st.warning(f"Could not generate CAPEX chart: {str(e)}")
 with tab_compare:
@@ -1040,7 +1040,7 @@ with tab_compare:
             "Charging Hours": "Total daily charging hours (higher = better utilization)"
         }
         
-        st.dataframe(styled_df, use_container_width=True)
+        st.dataframe(styled_df, width='stretch')
         
         # Metric explanations
         with st.expander("📖 Metric Definitions & Optimization Goals", expanded=False):
@@ -1078,7 +1078,7 @@ with tab_compare:
         )
         fig_financial.update_yaxes(title_text="Amount (€)", row=1, col=1)
         fig_financial.update_yaxes(title_text="Amount (€)", row=1, col=2)
-        st.plotly_chart(fig_financial, use_container_width=True)
+        st.plotly_chart(fig_financial, width='stretch')
 
         # Operational Metrics (Service Level, Charging Hours)
         operational_metrics = ["Service Level (%)", "Charging Hours"]
@@ -1102,7 +1102,7 @@ with tab_compare:
         )
         fig_operational.update_yaxes(title_text="Percentage (%)", row=1, col=1)
         fig_operational.update_yaxes(title_text="Hours per Day", row=1, col=2)
-        st.plotly_chart(fig_operational, use_container_width=True)
+        st.plotly_chart(fig_operational, width='stretch')
         
         # Radar Chart for Multi-Dimensional Analysis
         st.markdown("### 🕸️ Multi-Metric Performance Radar")
@@ -1127,7 +1127,7 @@ with tab_compare:
             title='Scenario Performance Radar (Multi-Dimensional Analysis)',
             template='plotly_white'
         )
-        st.plotly_chart(fig_radar, use_container_width=True)
+        st.plotly_chart(fig_radar, width='stretch')
         
         # Trend Analysis (if multiple scenarios)
         if len(all_keys) > 1:
@@ -1155,7 +1155,7 @@ with tab_compare:
                 hovermode='x unified',
                 legend_title='Performance Metrics'
             )
-            st.plotly_chart(fig_trend, use_container_width=True)
+            st.plotly_chart(fig_trend, width='stretch')
         
         # Recommendation Engine
         st.markdown("### 💡 Scenario Recommendations")
