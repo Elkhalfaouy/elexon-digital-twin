@@ -5,6 +5,10 @@ import plotly.graph_objects as go
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from PIL import Image
+import json
+import folium
+from streamlit_folium import st_folium
+import io
 # --- 1. CONFIGURATION & BRANDING ---
 st.set_page_config(page_title="Elexon Digital Twin", layout="wide", page_icon="⚡")
 st.markdown("""
@@ -51,9 +55,9 @@ with st.sidebar:
     if 'scenarios' not in st.session_state:
         st.session_state['scenarios'] = {}
     
-    # Initialize layout variables in session state
+    # Initialize layout variables in session state (prefer GIS selections when present)
     if 'available_area' not in st.session_state:
-        st.session_state['available_area'] = 3000
+        st.session_state['available_area'] = st.session_state.get("site_area_m2", 3000)
    
     c1, c2, c3 = st.columns(3)
     with c1:
@@ -84,7 +88,11 @@ with st.sidebar:
     # --- TECHNICAL ---
     with st.expander("⚙️ Technical Specifications", expanded=False):
         st.caption("Grid Constraints")
-        transformer_limit_kva = st.number_input("Transformer Limit (kVA)", value=4000, step=100)
+        transformer_limit_kva = st.number_input(
+            "Transformer Limit (kVA)",
+            value=st.session_state.get("site_grid_kva", 4000),
+            step=100
+        )
         power_factor = st.slider("Power Factor (PF)", 0.85, 1.00, 0.95, step=0.01)
        
         st.caption("Charger Configuration")
@@ -379,7 +387,150 @@ with c3:
         </div>
         """, unsafe_allow_html=True)
 # --- NEW: DASHBOARD TAB ADDED ---
-tab_dash, tab_tech, tab_serv, tab_fin, tab_long, tab_capex, tab_compare, tab_layout = st.tabs(["� Dashboard", "⚙️ Technical", "⚠️ Service", "💼 Financials", "📈 Long-Term", "💰 CAPEX", "⚖️ Compare", "📐 Layout"])
+tab_dash, tab_tech, tab_serv, tab_fin, tab_long, tab_capex, tab_compare, tab_layout, tab_gis = st.tabs([
+    "� Dashboard", "⚙️ Technical", "⚠️ Service", "💼 Financials", "📈 Long-Term", "💰 CAPEX", "⚖️ Compare", "📐 Layout", "🗺️ GIS Digital Twin"
+])
+
+# ---------------- GIS Digital Twin (isolated) ----------------
+with tab_gis:
+    st.subheader("🗺️ GIS Digital Twin")
+    st.caption("Select a candidate site and sync grid capacity and area into the twin (thesis-ready).")
+
+    def load_sites(path="gis/sites.geojson"):
+        """Load candidate sites from GeoJSON with defensive checks."""
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except FileNotFoundError:
+            st.warning("File not found: gis/sites.geojson")
+            return []
+        except json.JSONDecodeError:
+            st.error("Invalid GeoJSON format in gis/sites.geojson")
+            return []
+
+        feats = data.get("features") or []
+        sites_local = []
+        for idx, feat in enumerate(feats):
+            props = feat.get("properties") or {}
+            geom = feat.get("geometry") or {}
+            coords = geom.get("coordinates") or []
+            if not (isinstance(coords, list) and len(coords) >= 2):
+                continue  # skip malformed geometry
+
+            sites_local.append({
+                "site_id": props.get("site_id") or props.get("id") or f"site_{idx+1}",
+                "name": props.get("name") or f"Site {idx+1}",
+                "grid_kva": props.get("grid_kva"),
+                "land_area_m2": props.get("land_area_m2"),
+                "lon": coords[0],
+                "lat": coords[1],
+            })
+        return sites_local
+
+    sites = load_sites()
+    if not sites:
+        st.info("Provide a valid GeoJSON at gis/sites.geojson to enable GIS scoring and export.")
+    else:
+        # --- Multi-criteria scoring (grid_kva and land_area_m2, equal weight) ---
+        def safe_min_max_norm(all_vals, val):
+            nums = [v for v in all_vals if isinstance(v, (int, float))]
+            if not nums or val is None or not isinstance(val, (int, float)):
+                return 0.0
+            vmin, vmax = min(nums), max(nums)
+            if vmax == vmin:
+                return 1.0
+            return (val - vmin) / (vmax - vmin)
+
+        grid_vals = [s.get("grid_kva") for s in sites]
+        area_vals = [s.get("land_area_m2") for s in sites]
+
+        for s in sites:
+            s["norm_grid"] = safe_min_max_norm(grid_vals, s.get("grid_kva"))
+            s["norm_area"] = safe_min_max_norm(area_vals, s.get("land_area_m2"))
+            s["score"] = round(0.5 * s["norm_grid"] + 0.5 * s["norm_area"], 3)
+
+        ranked_sites = sorted(sites, key=lambda x: x["score"], reverse=True)
+        scores = [s["score"] for s in ranked_sites] if ranked_sites else [0.0]
+        p33 = float(np.percentile(scores, 33)) if len(scores) > 1 else scores[0]
+        p66 = float(np.percentile(scores, 66)) if len(scores) > 1 else scores[0]
+
+        def score_color(score):
+            if score >= p66:
+                return "green"
+            if score >= p33:
+                return "orange"
+            return "red"
+
+        # Center map
+        avg_lat = sum(s["lat"] for s in sites) / len(sites)
+        avg_lon = sum(s["lon"] for s in sites) / len(sites)
+        m = folium.Map(location=[avg_lat, avg_lon], zoom_start=11, tiles="OpenStreetMap")
+
+        # Add markers with score-based colors
+        for s in sites:
+            popup_lines = [
+                f"<b>{s['name']}</b>",
+                f"Site ID: {s['site_id']}",
+                f"Grid (kVA): {s['grid_kva'] if s.get('grid_kva') is not None else 'n/a'}",
+                f"Land (m²): {s['land_area_m2'] if s.get('land_area_m2') is not None else 'n/a'}",
+                f"Score: {s.get('score', 0.0)}",
+            ]
+            folium.Marker(
+                location=[s["lat"], s["lon"]],
+                tooltip=f"{s['name']} (score: {s.get('score', 0.0)})",
+                popup="<br>".join(popup_lines),
+                icon=folium.Icon(color=score_color(s.get("score", 0.0)), icon="info-sign"),
+            ).add_to(m)
+
+        st_folium(m, height=420, width="100%", key="gis_map")
+
+        # Ranking table
+        st.markdown("### Site Ranking")
+        df_rank = pd.DataFrame(ranked_sites)[["site_id", "name", "grid_kva", "land_area_m2", "score"]]
+        st.dataframe(df_rank, use_container_width=True, hide_index=True)
+        st.caption("Marker colors: green = top tier, orange = mid tier, red = lower tier.")
+
+        # Dropdown selection
+        options = {f"{s['name']} ({s['site_id']})": s["site_id"] for s in sites}
+        choice = st.selectbox("Select a site", ["— Select —"] + list(options.keys()))
+
+        if choice != "— Select —":
+            selected_id = options[choice]
+            selected = next((s for s in sites if s["site_id"] == selected_id), None)
+            if selected:
+                if selected.get("grid_kva") is not None:
+                    st.session_state["site_grid_kva"] = int(selected["grid_kva"])
+                if selected.get("land_area_m2") is not None:
+                    st.session_state["site_area_m2"] = int(selected["land_area_m2"])
+
+                st.success(
+                    f"Selected: {selected['name']} ({selected['site_id']}) → "
+                    f"grid_kva={st.session_state.get('site_grid_kva', 'n/a')}, "
+                    f"land_area_m2={st.session_state.get('site_area_m2', 'n/a')}"
+                )
+            else:
+                st.warning("Selected site not found in the loaded list.")
+
+        # Exports
+        csv_bytes = df_rank.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            label="Download Site Ranking (CSV)",
+            data=csv_bytes,
+            file_name="site_ranking.csv",
+            mime="text/csv",
+            help="Exports the multi-criteria ranking table for thesis appendices."
+        )
+
+        map_html = m.get_root().render()
+        st.download_button(
+            label="Download GIS Map (HTML)",
+            data=map_html,
+            file_name="gis_map.html",
+            mime="text/html",
+            help="Open in a browser and use print/save or screenshot for a PNG figure."
+        )
+
+        st.caption("PNG workflow: open gis_map.html in a browser → print/save or screenshot for high-res PNG.")
 
 with tab_dash:
     st.subheader("🎯 Executive Dashboard")
