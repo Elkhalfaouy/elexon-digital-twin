@@ -5,6 +5,10 @@ import plotly.graph_objects as go
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from PIL import Image
+
+import json
+import folium
+from streamlit_folium import st_folium
 # --- 1. CONFIGURATION & BRANDING ---
 st.set_page_config(page_title="Elexon Digital Twin", layout="wide", page_icon="⚡")
 st.markdown("""
@@ -1407,3 +1411,7 @@ Power Rating: HPC {hpc_power_kw}kW | AC {ac_power_kw}kW"""
                  edgecolor='#4a5568', facecolor='white', title='Engineering Elements')
 
         st.pyplot(fig_layout)
+
+# Footer
+st.markdown("---")
+st.markdown("**Developed by Amine El khalfaouy** - Thesis Project")
