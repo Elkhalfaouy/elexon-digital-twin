@@ -959,6 +959,8 @@ with tab_capex:
         "Subtotal (€)": [n_hpc*cost_dispenser, n_power_units*cost_cabinet, n_ac*cost_ac_unit, n_hpc*cost_civil_hpc, n_power_units*cost_civil_cab, cost_cabling, cost_grid_fee, cost_trafo_install, cost_soft, pv_kwp*cost_pv_unit, bess_kwh*cost_bess_unit]
     }
     df_capex = pd.DataFrame(capex_items)
+    # Ensure mixed-type column is Arrow-compatible
+    df_capex["Count"] = df_capex["Count"].astype(str)
     st.dataframe(df_capex.style.format({"Unit Price": "€{:,.0f}", "Subtotal (€)": "€{:,.0f}"}), width='stretch')
     st.success(f"**TOTAL PROJECT INVESTMENT:** €{capex_total:,.2f}")
     # Enhanced Pie chart of capex breakdown
