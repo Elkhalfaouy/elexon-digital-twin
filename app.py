@@ -1404,6 +1404,4 @@ Power Rating: HPC {hpc_power_kw}kW | AC {ac_power_kw}kW"""
             plt.Line2D([0], [0], color='#003366', linestyle='-', linewidth=1, label='10m Grid')
         ]
         ax.legend(handles=legend_elements, loc='upper right', fontsize=9, framealpha=0.95,
-                 edgecolor='#4a5568', facecolor='white', title='Engineering Elements')
-
-        st.pyplot(fig_layout)
+                 edgecolor='#4a5568', facecolor='white', title='Engineering Elem
