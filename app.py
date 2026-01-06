@@ -5,6 +5,10 @@ import plotly.graph_objects as go
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from PIL import Image
+import json
+import folium
+from streamlit_folium import st_folium
+import io
 # --- 1. CONFIGURATION & BRANDING ---
 st.set_page_config(page_title="Elexon Digital Twin", layout="wide", page_icon="⚡")
 st.markdown("""
@@ -37,6 +41,7 @@ st.markdown("""
 st.sidebar.markdown("## ⚡ **elexon** charging")
 st.sidebar.caption("Digital Twin & Feasibility Tool")
 st.sidebar.divider()
+st.sidebar.caption("Author: Amine El khalfaouy")
 # --- NEW: MULTI-SITE SELECTOR ---
 project_name = st.sidebar.text_input("🏢 Project Name / Site:", value="Schkeuditz Logistics Node")
 st.title(f"🏭 **Elexon Charging Hub Digital Twin** - {project_name}")
@@ -50,9 +55,9 @@ with st.sidebar:
     if 'scenarios' not in st.session_state:
         st.session_state['scenarios'] = {}
     
-    # Initialize layout variables in session state
+    # Initialize layout variables in session state (prefer GIS selections when present)
     if 'available_area' not in st.session_state:
-        st.session_state['available_area'] = 3000
+        st.session_state['available_area'] = st.session_state.get("site_area_m2", 3000)
    
     c1, c2, c3 = st.columns(3)
     with c1:
@@ -83,7 +88,11 @@ with st.sidebar:
     # --- TECHNICAL ---
     with st.expander("⚙️ Technical Specifications", expanded=False):
         st.caption("Grid Constraints")
-        transformer_limit_kva = st.number_input("Transformer Limit (kVA)", value=4000, step=100)
+        transformer_limit_kva = st.number_input(
+            "Transformer Limit (kVA)",
+            value=st.session_state.get("site_grid_kva", 4000),
+            step=100
+        )
         power_factor = st.slider("Power Factor (PF)", 0.85, 1.00, 0.95, step=0.01)
        
         st.caption("Charger Configuration")
@@ -378,7 +387,150 @@ with c3:
         </div>
         """, unsafe_allow_html=True)
 # --- NEW: DASHBOARD TAB ADDED ---
-tab_dash, tab_tech, tab_serv, tab_fin, tab_long, tab_capex, tab_compare, tab_layout = st.tabs(["� Dashboard", "⚙️ Technical", "⚠️ Service", "💼 Financials", "📈 Long-Term", "💰 CAPEX", "⚖️ Compare", "📐 Layout"])
+tab_dash, tab_tech, tab_serv, tab_fin, tab_long, tab_capex, tab_compare, tab_layout, tab_gis = st.tabs([
+    "� Dashboard", "⚙️ Technical", "⚠️ Service", "💼 Financials", "📈 Long-Term", "💰 CAPEX", "⚖️ Compare", "📐 Layout", "🗺️ GIS Digital Twin"
+])
+
+# ---------------- GIS Digital Twin (isolated) ----------------
+with tab_gis:
+    st.subheader("🗺️ GIS Digital Twin")
+    st.caption("Select a candidate site and sync grid capacity and area into the twin (thesis-ready).")
+
+    def load_sites(path="gis/sites.geojson"):
+        """Load candidate sites from GeoJSON with defensive checks."""
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except FileNotFoundError:
+            st.warning("File not found: gis/sites.geojson")
+            return []
+        except json.JSONDecodeError:
+            st.error("Invalid GeoJSON format in gis/sites.geojson")
+            return []
+
+        feats = data.get("features") or []
+        sites_local = []
+        for idx, feat in enumerate(feats):
+            props = feat.get("properties") or {}
+            geom = feat.get("geometry") or {}
+            coords = geom.get("coordinates") or []
+            if not (isinstance(coords, list) and len(coords) >= 2):
+                continue  # skip malformed geometry
+
+            sites_local.append({
+                "site_id": props.get("site_id") or props.get("id") or f"site_{idx+1}",
+                "name": props.get("name") or f"Site {idx+1}",
+                "grid_kva": props.get("grid_kva"),
+                "land_area_m2": props.get("land_area_m2"),
+                "lon": coords[0],
+                "lat": coords[1],
+            })
+        return sites_local
+
+    sites = load_sites()
+    if not sites:
+        st.info("Provide a valid GeoJSON at gis/sites.geojson to enable GIS scoring and export.")
+    else:
+        # --- Multi-criteria scoring (grid_kva and land_area_m2, equal weight) ---
+        def safe_min_max_norm(all_vals, val):
+            nums = [v for v in all_vals if isinstance(v, (int, float))]
+            if not nums or val is None or not isinstance(val, (int, float)):
+                return 0.0
+            vmin, vmax = min(nums), max(nums)
+            if vmax == vmin:
+                return 1.0
+            return (val - vmin) / (vmax - vmin)
+
+        grid_vals = [s.get("grid_kva") for s in sites]
+        area_vals = [s.get("land_area_m2") for s in sites]
+
+        for s in sites:
+            s["norm_grid"] = safe_min_max_norm(grid_vals, s.get("grid_kva"))
+            s["norm_area"] = safe_min_max_norm(area_vals, s.get("land_area_m2"))
+            s["score"] = round(0.5 * s["norm_grid"] + 0.5 * s["norm_area"], 3)
+
+        ranked_sites = sorted(sites, key=lambda x: x["score"], reverse=True)
+        scores = [s["score"] for s in ranked_sites] if ranked_sites else [0.0]
+        p33 = float(np.percentile(scores, 33)) if len(scores) > 1 else scores[0]
+        p66 = float(np.percentile(scores, 66)) if len(scores) > 1 else scores[0]
+
+        def score_color(score):
+            if score >= p66:
+                return "green"
+            if score >= p33:
+                return "orange"
+            return "red"
+
+        # Center map
+        avg_lat = sum(s["lat"] for s in sites) / len(sites)
+        avg_lon = sum(s["lon"] for s in sites) / len(sites)
+        m = folium.Map(location=[avg_lat, avg_lon], zoom_start=11, tiles="OpenStreetMap")
+
+        # Add markers with score-based colors
+        for s in sites:
+            popup_lines = [
+                f"<b>{s['name']}</b>",
+                f"Site ID: {s['site_id']}",
+                f"Grid (kVA): {s['grid_kva'] if s.get('grid_kva') is not None else 'n/a'}",
+                f"Land (m²): {s['land_area_m2'] if s.get('land_area_m2') is not None else 'n/a'}",
+                f"Score: {s.get('score', 0.0)}",
+            ]
+            folium.Marker(
+                location=[s["lat"], s["lon"]],
+                tooltip=f"{s['name']} (score: {s.get('score', 0.0)})",
+                popup="<br>".join(popup_lines),
+                icon=folium.Icon(color=score_color(s.get("score", 0.0)), icon="info-sign"),
+            ).add_to(m)
+
+        st_folium(m, height=420, width="100%", key="gis_map")
+
+        # Ranking table
+        st.markdown("### Site Ranking")
+        df_rank = pd.DataFrame(ranked_sites)[["site_id", "name", "grid_kva", "land_area_m2", "score"]]
+        st.dataframe(df_rank, width='stretch', hide_index=True)
+        st.caption("Marker colors: green = top tier, orange = mid tier, red = lower tier.")
+
+        # Dropdown selection
+        options = {f"{s['name']} ({s['site_id']})": s["site_id"] for s in sites}
+        choice = st.selectbox("Select a site", ["— Select —"] + list(options.keys()))
+
+        if choice != "— Select —":
+            selected_id = options[choice]
+            selected = next((s for s in sites if s["site_id"] == selected_id), None)
+            if selected:
+                if selected.get("grid_kva") is not None:
+                    st.session_state["site_grid_kva"] = int(selected["grid_kva"])
+                if selected.get("land_area_m2") is not None:
+                    st.session_state["site_area_m2"] = int(selected["land_area_m2"])
+
+                st.success(
+                    f"Selected: {selected['name']} ({selected['site_id']}) → "
+                    f"grid_kva={st.session_state.get('site_grid_kva', 'n/a')}, "
+                    f"land_area_m2={st.session_state.get('site_area_m2', 'n/a')}"
+                )
+            else:
+                st.warning("Selected site not found in the loaded list.")
+
+        # Exports
+        csv_bytes = df_rank.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            label="Download Site Ranking (CSV)",
+            data=csv_bytes,
+            file_name="site_ranking.csv",
+            mime="text/csv",
+            help="Exports the multi-criteria ranking table for thesis appendices."
+        )
+
+        map_html = m.get_root().render()
+        st.download_button(
+            label="Download GIS Map (HTML)",
+            data=map_html,
+            file_name="gis_map.html",
+            mime="text/html",
+            help="Open in a browser and use print/save or screenshot for a PNG figure."
+        )
+
+        st.caption("PNG workflow: open gis_map.html in a browser → print/save or screenshot for high-res PNG.")
 
 with tab_dash:
     st.subheader("🎯 Executive Dashboard")
@@ -417,7 +569,7 @@ with tab_dash:
                 "⏱️ Payback": f"{st.session_state['scenarios'][k]['Payback (Yrs)']:.1f} yrs",
                 "🔋 Utilization": f"{st.session_state['scenarios'][k]['Charging Hours']:.0f} hrs"
             })
-        st.dataframe(pd.DataFrame(scenario_data), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(scenario_data), width='stretch', hide_index=True)
     
     # Professional System Health Dashboard
     st.markdown("### 🔍 **System Health Dashboard**")
@@ -619,7 +771,7 @@ with tab_tech:
     fig.add_annotation(text="Warning Zone", x=0.02, y=transformer_limit_kva*0.875, showarrow=False, font=dict(color='#d97706'))
     fig.add_annotation(text="Critical Zone", x=0.02, y=transformer_limit_kva*1.05, showarrow=False, font=dict(color='#dc2626'))
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 with tab_serv:
     st.markdown("### Service Level Analysis")
     st.info("💡 **Why 99% Service Level?** Industry standard for infrastructure reliability - allows 1% queuing while ensuring high service quality. Service level = (Energy Served / Energy Demanded) × 100%. Demand = traffic × power × charging time.")
@@ -713,7 +865,7 @@ with tab_serv:
     fig_cap.add_annotation(text="Optimal Range", x=0.02, y=n_hpc * hpc_power_kw * 0.8, showarrow=False, font=dict(color='#d97706', size=10))
     fig_cap.add_annotation(text="Overloaded", x=0.02, y=n_hpc * hpc_power_kw * 0.95, showarrow=False, font=dict(color='#dc2626', size=10))
 
-    st.plotly_chart(fig_cap, use_container_width=True)
+    st.plotly_chart(fig_cap, width='stretch')
 
 with tab_fin:
     c1, c2 = st.columns([2, 1])
@@ -751,7 +903,7 @@ with tab_fin:
             showlegend=False
         )
 
-        st.plotly_chart(fig_w, use_container_width=True)
+        st.plotly_chart(fig_w, width='stretch')
     with c2:
         st.metric("LCOC", f"€{lcoc:.2f} / kWh")
         st.metric("Payback", f"{payback:.1f} Years")
@@ -797,7 +949,7 @@ with tab_long:
         fig_cf.add_vline(x=breakeven_year, line_width=3, line_dash="dash", line_color="#f59e0b",
                         annotation_text=f"Break-even: Year {breakeven_year}", annotation_position="top")
 
-    st.plotly_chart(fig_cf, use_container_width=True)
+    st.plotly_chart(fig_cf, width='stretch')
 with tab_capex:
     st.subheader("📋 Detailed Bill of Materials")
     capex_items = {
@@ -807,7 +959,9 @@ with tab_capex:
         "Subtotal (€)": [n_hpc*cost_dispenser, n_power_units*cost_cabinet, n_ac*cost_ac_unit, n_hpc*cost_civil_hpc, n_power_units*cost_civil_cab, cost_cabling, cost_grid_fee, cost_trafo_install, cost_soft, pv_kwp*cost_pv_unit, bess_kwh*cost_bess_unit]
     }
     df_capex = pd.DataFrame(capex_items)
-    st.dataframe(df_capex.style.format({"Unit Price": "€{:,.0f}", "Subtotal (€)": "€{:,.0f}"}), use_container_width=True)
+    # Ensure mixed-type column is Arrow-compatible
+    df_capex["Count"] = df_capex["Count"].astype(str)
+    st.dataframe(df_capex.style.format({"Unit Price": "€{:,.0f}", "Subtotal (€)": "€{:,.0f}"}), width='stretch')
     st.success(f"**TOTAL PROJECT INVESTMENT:** €{capex_total:,.2f}")
     # Enhanced Pie chart of capex breakdown
     try:
@@ -852,7 +1006,7 @@ with tab_capex:
                 showarrow=False
             )
 
-            st.plotly_chart(fig_pie, use_container_width=True)
+            st.plotly_chart(fig_pie, width='stretch')
     except Exception as e:
         st.warning(f"Could not generate CAPEX chart: {str(e)}")
 with tab_compare:
@@ -888,7 +1042,7 @@ with tab_compare:
             "Charging Hours": "Total daily charging hours (higher = better utilization)"
         }
         
-        st.dataframe(styled_df, use_container_width=True)
+        st.dataframe(styled_df, width='stretch')
         
         # Metric explanations
         with st.expander("📖 Metric Definitions & Optimization Goals", expanded=False):
@@ -926,7 +1080,7 @@ with tab_compare:
         )
         fig_financial.update_yaxes(title_text="Amount (€)", row=1, col=1)
         fig_financial.update_yaxes(title_text="Amount (€)", row=1, col=2)
-        st.plotly_chart(fig_financial, use_container_width=True)
+        st.plotly_chart(fig_financial, width='stretch')
 
         # Operational Metrics (Service Level, Charging Hours)
         operational_metrics = ["Service Level (%)", "Charging Hours"]
@@ -950,7 +1104,7 @@ with tab_compare:
         )
         fig_operational.update_yaxes(title_text="Percentage (%)", row=1, col=1)
         fig_operational.update_yaxes(title_text="Hours per Day", row=1, col=2)
-        st.plotly_chart(fig_operational, use_container_width=True)
+        st.plotly_chart(fig_operational, width='stretch')
         
         # Radar Chart for Multi-Dimensional Analysis
         st.markdown("### 🕸️ Multi-Metric Performance Radar")
@@ -975,7 +1129,7 @@ with tab_compare:
             title='Scenario Performance Radar (Multi-Dimensional Analysis)',
             template='plotly_white'
         )
-        st.plotly_chart(fig_radar, use_container_width=True)
+        st.plotly_chart(fig_radar, width='stretch')
         
         # Trend Analysis (if multiple scenarios)
         if len(all_keys) > 1:
@@ -1003,7 +1157,7 @@ with tab_compare:
                 hovermode='x unified',
                 legend_title='Performance Metrics'
             )
-            st.plotly_chart(fig_trend, use_container_width=True)
+            st.plotly_chart(fig_trend, width='stretch')
         
         # Recommendation Engine
         st.markdown("### 💡 Scenario Recommendations")
